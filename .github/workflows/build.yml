@@ -1,4 +1,4 @@
-name: Build Space L menu patch
+name: Build Space L installable APK
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  build-menu-patch:
+  build-space-l:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,8 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT=/usr/local/lib/android/sdk
-          if [ -n "$ANDROID_HOME" ]; then SDK_ROOT="$ANDROID_HOME"; fi
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           test -d "$SDK_ROOT/cmdline-tools"
           export ANDROID_HOME="$SDK_ROOT"
           export ANDROID_SDK_ROOT="$SDK_ROOT"
@@ -41,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p app tools build
+          mkdir -p app tools build dist
           curl --fail --location --retry 3 \
             https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar \
             --output tools/apktool.jar
@@ -51,7 +50,7 @@ jobs:
           echo "f2cc5e11d0906b2338c8d3a4912f017b8ac0b876f66a87d547ac8c33f3a1981c  app/input.apk" | sha256sum --check
           java -jar tools/apktool.jar d -f app/input.apk -o build/decoded
 
-      - name: Inspect APK and validate Activity hook
+      - name: Inspect APK and inject Space L UI hook
         run: |
           set -euo pipefail
           python3 scripts/inspect_apk.py --apk app/input.apk --decoded build/decoded --report build/APK_Analysis_Report.md
@@ -71,32 +70,65 @@ jobs:
           test -s build/dex/classes.dex
           python3 -m py_compile scripts/patch.py scripts/inspect_apk.py
 
-      - name: Verify Apktool rebuild and DEX insertion
+      - name: Rebuild APK and append Space L DEX
         run: |
           set -euo pipefail
-          java -jar tools/apktool.jar b build/decoded -o build/SpaceL-unsigned.apk
-          python3 scripts/patch.py --apk build/SpaceL-unsigned.apk \
-            --dex build/dex/classes.dex --output-apk build/SpaceL-validation.apk
-          unzip -l build/SpaceL-validation.apk | grep -E 'classes[0-9]*\.dex'
+          java -jar tools/apktool.jar b build/decoded -o build/SpaceL-rebuilt.apk
+          python3 scripts/patch.py --apk build/SpaceL-rebuilt.apk \
+            --dex build/dex/classes.dex --output-apk build/SpaceL-with-menu-unsigned.apk
+          unzip -t build/SpaceL-with-menu-unsigned.apk
+          unzip -l build/SpaceL-with-menu-unsigned.apk | grep -E 'classes[0-9]*\.dex'
 
-      - name: Package source-only patch
+      - name: Align and sign APK with temporary CI test key
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/app
-          cp -R app/src dist/app/
-          cp app/README.md dist/app/README.md
-          cp -R scripts dist/
-          find dist -type d -name __pycache__ -prune -exec rm -rf {} +
-          cp README.md dist/
-          cp build/dex/classes.dex dist/SpaceL_Menu.dex
-          cp build/APK_Analysis_Report.md dist/
-          cd dist
-          zip -qr ../SpaceL_Source_Patch.zip .
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          keytool -genkeypair -noprompt \
+            -keystore build/spaceL-ci-test.keystore \
+            -storepass spaceL-ci-only -keypass spaceL-ci-only \
+            -alias spaceL-test -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Space L CI Test, OU=Local Build, O=Space L, C=US"
+          "$BUILD_TOOLS/zipalign" -p -f 4 \
+            build/SpaceL-with-menu-unsigned.apk build/SpaceL-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks build/spaceL-ci-test.keystore \
+            --ks-key-alias spaceL-test \
+            --ks-pass pass:spaceL-ci-only \
+            --key-pass pass:spaceL-ci-only \
+            --out dist/SpaceL_Mod.apk \
+            build/SpaceL-aligned.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs dist/SpaceL_Mod.apk
+          sha256sum dist/SpaceL_Mod.apk > dist/SpaceL_Mod.apk.sha256
 
-      - name: Upload source patch artifact
+      - name: Package source patch and APK analysis
+        run: |
+          set -euo pipefail
+          mkdir -p source-patch/app
+          cp -R app/src source-patch/app/
+          cp app/README.md source-patch/app/README.md
+          cp -R scripts source-patch/
+          find source-patch -type d -name __pycache__ -prune -exec rm -rf {} +
+          cp README.md source-patch/
+          cp build/dex/classes.dex source-patch/SpaceL_Menu.dex
+          cp build/APK_Analysis_Report.md source-patch/
+          cd source-patch
+          zip -qr ../dist/SpaceL_Source_Patch.zip .
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpaceL-Installable-APK
+          path: |
+            dist/SpaceL_Mod.apk
+            dist/SpaceL_Mod.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload source patch
         uses: actions/upload-artifact@v4
         with:
           name: SpaceL-Source-Patch
-          path: SpaceL_Source_Patch.zip
+          path: dist/SpaceL_Source_Patch.zip
           if-no-files-found: error
           retention-days: 14
