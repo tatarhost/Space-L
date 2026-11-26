@@ -70,6 +70,15 @@ jobs:
           test -s build/dex/classes.dex
           python3 -m py_compile scripts/patch.py scripts/inspect_apk.py
 
+      - name: Rebuild APK and append Space L DEX
+        run: |
+          set -euo pipefail
+          java -jar tools/apktool.jar b build/decoded -o build/SpaceL-rebuilt.apk
+          python3 scripts/patch.py --apk build/SpaceL-rebuilt.apk \
+            --dex build/dex/classes.dex --output-apk build/SpaceL-with-menu-unsigned.apk
+          unzip -t build/SpaceL-with-menu-unsigned.apk
+          unzip -l build/SpaceL-with-menu-unsigned.apk | grep -E 'classes[0-9]*\.dex'
+
       - name: Diagnose Android compatibility metadata
         shell: bash
         run: |
@@ -84,15 +93,6 @@ jobs:
           diff -u build/original-manifest-tree.txt build/rebuilt-manifest-tree.txt > build/manifest-diff.txt || true
           echo "===== MANIFEST DIFF (first 300 lines) ====="
           sed -n '1,300p' build/manifest-diff.txt
-
-      - name: Rebuild APK and append Space L DEX
-        run: |
-          set -euo pipefail
-          java -jar tools/apktool.jar b build/decoded -o build/SpaceL-rebuilt.apk
-          python3 scripts/patch.py --apk build/SpaceL-rebuilt.apk \
-            --dex build/dex/classes.dex --output-apk build/SpaceL-with-menu-unsigned.apk
-          unzip -t build/SpaceL-with-menu-unsigned.apk
-          unzip -l build/SpaceL-with-menu-unsigned.apk | grep -E 'classes[0-9]*\.dex'
 
       - name: Align and sign APK with temporary CI test key
         shell: bash
