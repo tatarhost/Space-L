@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  build-menu-dex:
+  build-menu-patch:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,7 +25,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDK_ROOT=/usr/local/lib/android/sdk
+          if [ -n "$ANDROID_HOME" ]; then SDK_ROOT="$ANDROID_HOME"; fi
           test -d "$SDK_ROOT/cmdline-tools"
           export ANDROID_HOME="$SDK_ROOT"
           export ANDROID_SDK_ROOT="$SDK_ROOT"
@@ -36,43 +37,58 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Download Baksmali
+      - name: Download Apktool and original APK
+        shell: bash
         run: |
-          mkdir -p tools build/classes build/dex build/generated
+          set -euo pipefail
+          mkdir -p app tools build
           curl --fail --location --retry 3 \
-            https://repo.maven.apache.org/maven2/org/smali/baksmali/2.5.2/baksmali-2.5.2.jar \
-            --output tools/baksmali.jar
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar \
+            --output tools/apktool.jar
+          curl --fail --location --retry 3 \
+            https://github.com/tatarhost/Space-L/releases/download/apk/Spaceflight.Simulator.apk \
+            --output app/input.apk
+          echo "f2cc5e11d0906b2338c8d3a4912f017b8ac0b876f66a87d547ac8c33f3a1981c  app/input.apk" | sha256sum --check
+          java -jar tools/apktool.jar d -f app/input.apk -o build/decoded
 
-      - name: Compile Space L UI and convert to Smali
+      - name: Inspect APK and validate Activity hook
+        run: |
+          set -euo pipefail
+          python3 scripts/inspect_apk.py --apk app/input.apk --decoded build/decoded --report build/APK_Analysis_Report.md
+          python3 scripts/patch.py --decoded build/decoded
+
+      - name: Compile Space L UI to DEX
         shell: bash
         run: |
           set -euo pipefail
           ANDROID_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
           D8="$ANDROID_HOME/build-tools/35.0.0/d8"
+          mkdir -p build/classes build/dex
+          find app/src/main/java -name '*.java' -print0 | \
+            xargs -0 javac --release 8 -classpath "$ANDROID_JAR" -d build/classes
+          find build/classes -name '*.class' -print0 | \
+            xargs -0 "$D8" --min-api 23 --lib "$ANDROID_JAR" --output build/dex
+          test -s build/dex/classes.dex
+          python3 -m py_compile scripts/patch.py scripts/inspect_apk.py
 
-          mapfile -t SOURCES < <(find app/src/main/java -name '*.java' -print)
-          test "${#SOURCES[@]}" -gt 0
-
-          javac --release 8 -classpath "$ANDROID_JAR" \
-            -d build/classes "${SOURCES[@]}"
-
-          mapfile -t CLASSES < <(find build/classes -name '*.class' -print)
-          "$D8" --min-api 23 --lib "$ANDROID_JAR" \
-            --output build/dex "${CLASSES[@]}"
-
-          java -jar tools/baksmali.jar disassemble \
-            build/dex/classes.dex \
-            --output build/generated/smali_classes2
-
-          test -f build/generated/smali_classes2/com/spaceL/menu/SpaceLMenu.smali
-          python3 -m py_compile scripts/patch.py
-
-      - name: Package source patch
+      - name: Verify Apktool rebuild and DEX insertion
         run: |
-          mkdir -p dist
-          cp -R app scripts README.md dist/
-          cp -R build/generated/smali_classes2 dist/
+          set -euo pipefail
+          java -jar tools/apktool.jar b build/decoded -o build/SpaceL-unsigned.apk
+          python3 scripts/patch.py --apk build/SpaceL-unsigned.apk \
+            --dex build/dex/classes.dex --output-apk build/SpaceL-validation.apk
+          unzip -l build/SpaceL-validation.apk | grep -E 'classes[0-9]*\.dex'
+
+      - name: Package source-only patch
+        run: |
+          set -euo pipefail
+          mkdir -p dist/app
+          cp -R app/src dist/app/
+          cp app/README.md dist/app/README.md
+          cp -R scripts dist/
+          cp README.md dist/
           cp build/dex/classes.dex dist/SpaceL_Menu.dex
+          cp build/APK_Analysis_Report.md dist/
           cd dist
           zip -qr ../SpaceL_Source_Patch.zip .
 
