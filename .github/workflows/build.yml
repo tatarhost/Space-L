@@ -70,6 +70,21 @@ jobs:
           test -s build/dex/classes.dex
           python3 -m py_compile scripts/patch.py scripts/inspect_apk.py
 
+      - name: Diagnose Android compatibility metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          echo "===== ORIGINAL APK ====="
+          "$AAPT" dump badging app/input.apk | grep -E "^(package:|sdkVersion:|targetSdkVersion:|maxSdkVersion:|native-code:|uses-feature:)" || true
+          echo "===== REBUILT APK ====="
+          "$AAPT" dump badging build/SpaceL-rebuilt.apk | grep -E "^(package:|sdkVersion:|targetSdkVersion:|maxSdkVersion:|native-code:|uses-feature:)" || true
+          "$AAPT" dump xmltree app/input.apk AndroidManifest.xml > build/original-manifest-tree.txt
+          "$AAPT" dump xmltree build/SpaceL-rebuilt.apk AndroidManifest.xml > build/rebuilt-manifest-tree.txt
+          diff -u build/original-manifest-tree.txt build/rebuilt-manifest-tree.txt > build/manifest-diff.txt || true
+          echo "===== MANIFEST DIFF (first 300 lines) ====="
+          sed -n '1,300p' build/manifest-diff.txt
+
       - name: Rebuild APK and append Space L DEX
         run: |
           set -euo pipefail
