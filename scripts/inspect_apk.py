@@ -59,23 +59,18 @@ def main() -> int:
         if p.is_dir() and re.fullmatch(r"smali(?:_classes\d+)?", p.name)
     )
     smali_count = sum(1 for root in smali_dirs for _ in root.rglob("*.smali"))
-    target_files, target_on_create, target_super_call = [], False, False
-
+    target_files, target_parent, target_on_create = [], "", False
     for path in args.decoded.rglob("ExtendedUnityActivity.smali"):
         source = path.read_text(encoding="utf-8", errors="replace")
         if TARGET_DESCRIPTOR not in source:
             continue
         target_files.append(str(path.relative_to(args.decoded)))
-        method = re.search(
-            r"^\.method\s+[^\n]*onCreate\(Landroid/os/Bundle;\)V\s*$"
-            r"(.*?)^\.end method", source, re.M | re.S
-        )
-        if method:
-            target_on_create = True
-            target_super_call = bool(re.search(
-                r"invoke-super(?:/range)?\s+\{[^}]+\},\s*"
-                r"L[^;]+;->onCreate\(Landroid/os/Bundle;\)V", method.group(1)
-            ))
+        parent = re.search(r"^\.super\s+(L[^;\s]+;)\s*$", source, re.M)
+        if parent:
+            target_parent = parent.group(1)
+        target_on_create = bool(re.search(
+            r"^\.method\s+[^\n]*onCreate\(Landroid/os/Bundle;\)V\s*$", source, re.M
+        ))
 
     lines = [
         "# Space L APK compatibility report",
@@ -89,8 +84,8 @@ def main() -> int:
         "- Total Smali classes: " + str(smali_count),
         "- Target Activity declared in manifest: " + ("yes" if TARGET_ACTIVITY in meta["components"] else "no"),
         "- Target Activity Smali matches: " + str(len(target_files)),
-        "- Target onCreate(Bundle): " + ("yes" if target_on_create else "no"),
-        "- Superclass onCreate call: " + ("yes" if target_super_call else "no"),
+        "- Direct superclass: " + (target_parent or "not found"),
+        "- onCreate(Bundle) override present: " + ("yes" if target_on_create else "no; the patcher can add one"),
         "",
         "## Launcher activities",
         "",
@@ -103,8 +98,8 @@ def main() -> int:
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
-    if len(target_files) != 1 or not target_on_create or not target_super_call:
-        raise SystemExit("target Activity is not compatible with the expected hook layout")
+    if len(target_files) != 1 or not target_parent:
+        raise SystemExit("target Activity or direct superclass is not compatible with the expected hook")
     return 0
 
 if __name__ == "__main__":
