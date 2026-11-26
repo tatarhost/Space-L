@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Create a metadata-only compatibility report for an Apktool decoded APK."""
 from __future__ import annotations
-import argparse, re, zipfile
+import argparse
+import re
+import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -42,37 +44,42 @@ def main() -> int:
     if not manifest_path.is_file():
         parser.error(f"decoded manifest not found: {manifest_path}")
     meta = read_manifest(manifest_path)
+
     with zipfile.ZipFile(args.apk, "r") as apk:
         dex_entries = sorted(
             n for n in apk.namelist()
-            if re.fullmatch(r"classes(\\d*)\\.dex", Path(n).name)
+            if re.fullmatch(r"classes(\d*)\.dex", Path(n).name)
         )
-        native_libs = sorted(
+        native_libs = [
             n for n in apk.namelist() if n.startswith("lib/") and n.endswith(".so")
-        )
+        ]
+
     smali_dirs = sorted(
         p for p in args.decoded.iterdir()
-        if p.is_dir() and re.fullmatch(r"smali(?:_classes\\d+)?", p.name)
+        if p.is_dir() and re.fullmatch(r"smali(?:_classes\d+)?", p.name)
     )
     smali_count = sum(1 for root in smali_dirs for _ in root.rglob("*.smali"))
     target_files, target_on_create, target_super_call = [], False, False
+
     for path in args.decoded.rglob("ExtendedUnityActivity.smali"):
         source = path.read_text(encoding="utf-8", errors="replace")
         if TARGET_DESCRIPTOR not in source:
             continue
         target_files.append(str(path.relative_to(args.decoded)))
         method = re.search(
-            r"^\\.method\\s+[^\\n]*onCreate\\(Landroid/os/Bundle;\\)V\\s*$"
-            r"(.*?)^\\.end method", source, re.M | re.S
+            r"^\.method\s+[^\n]*onCreate\(Landroid/os/Bundle;\)V\s*$"
+            r"(.*?)^\.end method", source, re.M | re.S
         )
         if method:
             target_on_create = True
             target_super_call = bool(re.search(
-                r"invoke-super(?:/range)?\\s+\\{[^}]+\\},\\s*"
-                r"L[^;]+;->onCreate\\(Landroid/os/Bundle;\\)V", method.group(1)
+                r"invoke-super(?:/range)?\s+\{[^}]+\},\s*"
+                r"L[^;]+;->onCreate\(Landroid/os/Bundle;\)V", method.group(1)
             ))
+
     lines = [
-        "# Space L APK compatibility report", "",
+        "# Space L APK compatibility report",
+        "",
         "- Package: " + (meta["package"] or "not found"),
         "- Version name: " + (meta["version_name"] or "not declared"),
         "- Version code: " + (meta["version_code"] or "not declared"),
@@ -84,15 +91,18 @@ def main() -> int:
         "- Target Activity Smali matches: " + str(len(target_files)),
         "- Target onCreate(Bundle): " + ("yes" if target_on_create else "no"),
         "- Superclass onCreate call: " + ("yes" if target_super_call else "no"),
-        "", "## Launcher activities", "",
+        "",
+        "## Launcher activities",
+        "",
     ]
-    lines.extend(["- " + n for n in meta["launchers"]] or ["- none found"])
+    lines.extend(["- " + name for name in meta["launchers"]] or ["- none found"])
     if target_files:
         lines.extend(["", "## Matching Activity paths", ""])
-        lines.extend(["- " + n for n in target_files])
+        lines.extend(["- " + name for name in target_files])
+
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
-    print("\\n".join(lines))
+    args.report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines))
     if len(target_files) != 1 or not target_on_create or not target_super_call:
         raise SystemExit("target Activity is not compatible with the expected hook layout")
     return 0
