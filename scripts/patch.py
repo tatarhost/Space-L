@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Patch the UI-only Space L hook or append its compiled DEX to an unsigned APK."""
 from __future__ import annotations
-import argparse, re, sys, zipfile
+import argparse
+import re
+import sys
+import zipfile
 from pathlib import Path
 
 ACTIVITY_DESCRIPTOR = "Lcom/teamcuriosity/addons/ExtendedUnityActivity;"
@@ -11,6 +14,7 @@ SUPER_ON_CREATE = re.compile(
     r"^\s*invoke-super(?:/range)?\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V\s*$",
     re.M,
 )
+CLASS_SUPER = re.compile(r"^\.super\s+(L[^;\s]+;)\s*$", re.M)
 DEX_NAME = re.compile(r"classes(\d*)\.dex$")
 
 def find_activity(root: Path) -> Path:
@@ -29,19 +33,38 @@ def inject_activity(decoded: Path) -> bool:
     if HOOK in source:
         print(f"hook already present: {path}")
         return False
+
     method_match = ON_CREATE.search(source)
-    if not method_match:
-        raise RuntimeError("onCreate(Bundle) was not found in ExtendedUnityActivity")
-    method_end = source.find(".end method", method_match.end())
-    if method_end < 0:
-        raise RuntimeError("onCreate(Bundle) has no .end method")
-    method = source[method_match.start():method_end]
-    super_match = SUPER_ON_CREATE.search(method)
-    if not super_match:
-        raise RuntimeError("superclass onCreate(Bundle) not located; refusing to guess")
-    insert_at = method_match.start() + super_match.end()
-    path.write_text(source[:insert_at] + "\n    " + HOOK + source[insert_at:], encoding="utf-8")
-    print(f"inserted UI hook: {path}")
+    if method_match:
+        method_end = source.find(".end method", method_match.end())
+        if method_end < 0:
+            raise RuntimeError("onCreate(Bundle) has no .end method")
+        method = source[method_match.start():method_end]
+        super_match = SUPER_ON_CREATE.search(method)
+        if not super_match:
+            raise RuntimeError(
+                "existing onCreate(Bundle) has no superclass call; refusing to guess"
+            )
+        insert_at = method_match.start() + super_match.end()
+        source = source[:insert_at] + "\n    " + HOOK + source[insert_at:]
+        print(f"inserted UI hook into existing onCreate: {path}")
+    else:
+        parent_match = CLASS_SUPER.search(source)
+        if not parent_match:
+            raise RuntimeError("Activity direct superclass descriptor was not found")
+        parent = parent_match.group(1)
+        method = (
+            "\n\n.method public onCreate(Landroid/os/Bundle;)V\n"
+            "    .locals 0\n"
+            f"    invoke-super {{p0, p1}}, {parent}->onCreate(Landroid/os/Bundle;)V\n"
+            f"    {HOOK}\n"
+            "    return-void\n"
+            ".end method\n"
+        )
+        source = source.rstrip() + method
+        print(f"added onCreate override calling {parent}: {path}")
+
+    path.write_text(source, encoding="utf-8")
     return True
 
 def append_dex(unsigned_apk: Path, dex_file: Path, output_apk: Path) -> str:
