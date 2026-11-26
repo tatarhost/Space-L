@@ -1,0 +1,78 @@
+name: Build Space L menu patch
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-menu-dex:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform tools
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses >/dev/null
+
+      - name: Download Baksmali
+        run: |
+          mkdir -p tools build/classes build/dex build/generated
+          curl --fail --location --retry 3 \
+            https://repo.maven.apache.org/maven2/org/smali/baksmali/2.5.2/baksmali-2.5.2.jar \
+            --output tools/baksmali.jar
+
+      - name: Compile Space L UI and convert to Smali
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANDROID_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
+          D8="$ANDROID_HOME/build-tools/35.0.0/d8"
+
+          mapfile -t SOURCES < <(find app/src/main/java -name '*.java' -print)
+          test "${#SOURCES[@]}" -gt 0
+
+          javac --release 8 -classpath "$ANDROID_JAR" \
+            -d build/classes "${SOURCES[@]}"
+
+          mapfile -t CLASSES < <(find build/classes -name '*.class' -print)
+          "$D8" --min-api 23 --lib "$ANDROID_JAR" \
+            --output build/dex "${CLASSES[@]}"
+
+          java -jar tools/baksmali.jar disassemble \
+            build/dex/classes.dex \
+            --output build/generated/smali_classes2
+
+          test -f build/generated/smali_classes2/com/spaceL/menu/SpaceLMenu.smali
+          python3 -m py_compile scripts/patch.py
+
+      - name: Package source patch
+        run: |
+          mkdir -p dist
+          cp -R app scripts README.md dist/
+          cp -R build/generated/smali_classes2 dist/
+          cp build/dex/classes.dex dist/SpaceL_Menu.dex
+          cd dist
+          zip -qr ../SpaceL_Source_Patch.zip .
+
+      - name: Upload source patch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpaceL-Source-Patch
+          path: SpaceL_Source_Patch.zip
+          if-no-files-found: error
+          retention-days: 14
