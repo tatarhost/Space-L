@@ -86,6 +86,7 @@ jobs:
           cp -R app/src dist/app/
           cp app/README.md dist/app/README.md
           cp -R scripts dist/
+          find dist -type d -name __pycache__ -prune -exec rm -rf {} +
           cp README.md dist/
           cp build/dex/classes.dex dist/SpaceL_Menu.dex
           cp build/APK_Analysis_Report.md dist/
