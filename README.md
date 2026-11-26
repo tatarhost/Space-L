@@ -1,42 +1,51 @@
 # Space L
 
-Space L is a small, black-and-white in-app panel for Spaceflight Simulator.
+Space L is a black-and-white in-app panel for Spaceflight Simulator.
 
 ## Current scope
 
-This repository currently builds a **UI-only patch**:
+This repository builds a UI-only patch:
 - square black controls with white text;
-- a floating `Space L` button attached to the Activity decor view using `FrameLayout`;
+- a floating Space L button attached to the Activity decor view with FrameLayout;
 - Player, Unlocker and System tabs;
-- interface-scale setting;
-- `SpaceL_Config.json` export to Downloads on Android 10+ (app-specific Downloads directory on older Android);
-- link to https://cheatlab.fun.
+- an interface-scale slider;
+- SpaceL_Config.json export to Downloads on Android 10+ (app-specific Downloads directory on older Android);
+- a link to https://cheatlab.fun.
 
-It does not alter game memory or runtime physics, change damage/fuel state, teleport a craft, or modify Google Play Billing / paid DLC ownership.
+The current build does not alter game memory or runtime physics, change fuel or damage state, teleport a craft, or modify Google Play Billing / paid DLC ownership.
 
-## Source APK
+## Original APK
 
-The original APK is kept as the `Spaceflight.Simulator.apk` asset in the GitHub Release tagged `apk`; it is not copied into the source tree. The menu CI builds only the original Space L menu DEX and source patch ZIP, not a redistributed copy of the game APK.
+The original Spaceflight.Simulator.apk is kept as the asset in the GitHub Release tagged apk. CI downloads it temporarily, verifies its SHA-256, decodes it with Apktool and creates a metadata-only compatibility report. The original APK and rebuilt game APK are not included in the source artifact.
 
-## Build in GitHub Actions
+## GitHub Actions
 
-Push to `main` or open **Actions → Build Space L menu patch → Run workflow**.
+Push to main or open Actions → Build Space L menu patch → Run workflow.
 
-The workflow uses JDK 17, Android platform 35 / build-tools 35.0.0, D8 and Baksmali. Download the `SpaceL-Source-Patch` artifact from the completed run.
+The workflow:
+1. sets up JDK 17 and Android platform 35 / build-tools 35.0.0;
+2. downloads Apktool 2.11.1 and the original release APK;
+3. verifies the APK hash and inspects its manifest, DEX layout and requested Activity;
+4. validates the Activity hook;
+5. compiles the Java menu to DEX;
+6. tests an Apktool rebuild and insertion of the menu DEX into a temporary APK;
+7. uploads only SpaceL_Source_Patch.zip and the analysis report as an Actions artifact.
 
-## Applying the UI hook locally
+## Applying the UI patch locally
 
-1. Decode your own APK with Apktool:
-   `apktool d input.apk -o decoded`
-2. Copy the generated `smali_classes2` directory from the artifact into `decoded/`.
-3. Run:
-   `python scripts/patch.py --decoded decoded`
-4. Rebuild with Apktool:
-   `apktool b decoded -o SpaceL-unsigned.apk`
-5. Sign the result with your own signing key.
+1. Download and extract the SpaceL-Source-Patch artifact from the completed Actions run.
+2. Decode your APK with Apktool:
+   apktool d -f input.apk -o decoded
+3. Inject the Activity hook:
+   python scripts/patch.py --decoded decoded
+4. Rebuild the decoded package:
+   apktool b decoded -o SpaceL-unsigned.apk
+5. Append the compiled menu DEX:
+   python scripts/patch.py --apk SpaceL-unsigned.apk --dex SpaceL_Menu.dex --output-apk SpaceL-with-menu-unsigned.apk
+6. Sign SpaceL-with-menu-unsigned.apk with your own signing key. Signing must happen after DEX insertion.
 
-The patcher fails closed if it cannot find exactly one matching `ExtendedUnityActivity` or the expected superclass `onCreate(Bundle)` call.
+The patcher fails closed if it cannot find exactly one matching ExtendedUnityActivity or the expected superclass onCreate(Bundle) call.
 
 ## Compatibility
 
-The requested Activity name and package name are treated as expected inputs, not verified facts about every game version. A successful DEX compilation does not prove that the Activity hook is compatible with a particular APK. Check the exact APK version and test on a spare device.
+The Activity and package names provided in the project brief are treated as expected inputs, not assumed facts about every game version. The CI report checks the actual release APK. A successful DEX build still does not prove correct behaviour on a physical device; runtime testing is still required.
