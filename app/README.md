@@ -1,0 +1,1 @@
+The original APK is intentionally not committed here. CI builds the menu source and a Smali patch artifact. The original input remains the Release asset at tag `apk`.
