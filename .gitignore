@@ -1,0 +1,7 @@
+.gitignore
+app/input.apk
+build/
+dist/
+tools/
+__pycache__/
+*.py[cod]
